@@ -1,0 +1,88 @@
+#!/bin/sh
+#
+# Copyright (C) 2013-2015 OpenWrt.org
+#
+
+. /lib/functions/uci-defaults.sh
+. /lib/functions/system.sh
+
+nanopi_r2s_generate_mac()
+{
+        local sd_hash=$(sha256sum /sys/class/block/mmcblk0/device/cid)
+        local mac_base=$(macaddr_canonicalize "$(echo "${sd_hash}" | dd bs=1 count=12 2>/dev/null)")
+        echo "$(macaddr_unsetbit_mc "$(macaddr_setbit_la "${mac_base}")")"
+}
+
+rockchip_setup_macs()
+{
+        local board="$1"
+        local lan_mac=""
+        local wan_mac=""
+        local label_mac=""
+
+        case "$(board_name)" in
+        rockchip,rk3568-lunzn-r68s)
+                wan_mac=$(nanopi_r2s_generate_mac)
+                lan_mac=$(macaddr_add "$wan_mac" +1)
+                ;;
+        esac
+
+        [ -n "$lan_mac" ] && ucidef_set_interface_macaddr "lan" $lan_mac
+        [ -n "$wan_mac" ] && ucidef_set_interface_macaddr "wan" $wan_mac
+        [ -n "$label_mac" ] && ucidef_set_label_macaddr $label_mac
+}
+
+rockchip_setup_interfaces()
+{
+case "$(board_name)" in
+mrkaio,m68s)
+        ucidef_set_interfaces_lan_wan 'eth1' 'eth0'
+        ;;
+friendlyelec,nanopi-r5s)
+        ucidef_set_interfaces_lan_wan "eth1 eth2" "eth0"
+        ;;
+rockchip,rk3568-lunzn-r68s)
+        ucidef_set_interfaces_lan_wan "eth0 eth2 eth3" "eth1"
+        ;;
+rockchip,rk3568-firefly-roc-pc)
+        ucidef_set_interfaces_lan_wan "eth0 eth2 eth3" "eth1"
+        ;;
+rockchip,rk3568-bpi-r2pro-mt7531)
+        ucidef_set_interfaces_lan_wan "eth1 eth2 eth3" "eth0"
+        ucidef_add_switch "switch0" \
+                "1:lan:4" "2:lan:3" "3:lan:2" "4:lan:1"  "5u@eth1"
+        ;;
+
+rockchip,rk3568-bpi-r2pro-rtl8367)
+        ucidef_set_interfaces_lan_wan "eth0" "eth1"
+        ucidef_add_switch "switch0" \
+                "0:lan:4" "1:lan:3" "2:lan:2" "3:lan:1" "6u@eth0"
+        ;;
+*)
+        ucidef_set_interface_lan 'eth0'
+        ;;
+esac
+}
+
+board_config_update
+board=$(board_name)
+rockchip_setup_interfaces $board
+rockchip_setup_macs $board
+board_config_flush
+
+a=$(ip address | grep ^[0-9] | awk -F: '{print $2}' | sed "s/ //g" | grep '^[e]' | grep -v "@" | grep -v "\.")
+b=$(echo "$a" | wc -l)
+for i in $(seq 1 $b)
+do
+        c=$(echo "$a" | sed -n ${i}p)
+        ethtool -K $c rx-checksum on >/dev/null 2>&1
+        ethtool -K $c tx-checksum-ip-generic on >/dev/null 2>&1 || (
+        ethtool -K $c tx-checksum-ipv4 on >/dev/null 2>&1
+        ethtool -K $c tx-checksum-ipv6 on >/dev/null 2>&1)
+        ethtool -K $c tx-scatter-gather on >/dev/null 2>&1
+        ethtool -K $c gso on >/dev/null 2>&1
+        ethtool -K $c tso on >/dev/null 2>&1
+        ethtool -K $c ufo on >/dev/null 2>&1
+done
+
+exit 0
